@@ -18,11 +18,6 @@ in conjunction with the documentation for this package.
 **Author**: Martin F N Cooper, KD6YAM  
 **License**: MIT License
 
-### Limitations
-
-- This package supports only TCP/IP connection to a KISS server. It does not
-  support serial connection, nor are there plans to add such support.
-
 ## Installation
 
 **Important**: This package requires Python 3.7 or later.

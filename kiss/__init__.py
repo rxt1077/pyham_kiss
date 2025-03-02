@@ -24,6 +24,7 @@ from enum import Enum
 import errno
 import socket
 import threading
+import serial
 
 
 # Special characters
@@ -39,6 +40,14 @@ ENC_FESC = b'\xDB\xDD'
 
 DEF_HOST = '127.0.0.1'  # Default host
 DEF_PORT = 8000         # Default port
+
+DEF_SERIALPORT = 'COM3'  # Default serial port
+DEF_BAUDRATE   = 57600   # Default baud rate
+DEF_BYTESIZE   = 8       # Default byte size
+DEF_PARITY     = 'N'     # Default parity
+DEF_STOPBITS   = 1       # Default stop bits
+DEF_XONXOFF    = False   # Default XON/XOFF
+DEF_RTSCTS     = False   # Default RTS/CTS
 
 WSAENOTSOCK = 10038  # Windows error raised when socket is closed
 
@@ -88,13 +97,14 @@ class Connection:
     :type callback: function or None
     """
     def __init__(self, callback):
+        self._serial_port = None
         self._sock = None
         self._receiver = None
         self._client_callback = callback
 
     def connect_to_server(self, host=DEF_HOST, port=DEF_PORT):
         """
-        Connect to the KISS TNC.
+        Connect to the KISS TNC via TCP.
 
         Call this before any other methods on this class. It is an error to
         call this again once connected. However, an instance may be reused
@@ -109,6 +119,37 @@ class Connection:
         self._sock.connect((host, port))
         if self._client_callback:
             self._receiver = _ReceiveThread(self)
+            self._receiver.daemon = True
+            self._receiver.start()
+
+    def connect_to_serial(self, serial_port=DEF_SERIALPORT,
+                          baudrate=DEF_BAUDRATE, bytesize=DEF_BYTESIZE,
+                          parity=DEF_PARITY, stopbits=DEF_STOPBITS,
+                          xonxoff=DEF_XONXOFF, rtscts=DEF_RTSCTS):
+        """
+        Connect to the KISS TNC via serial port.
+
+        Call this before any other methods on this class. It is an error to
+        call this again once connected. However, an instance may be reused
+        by connecting again after disconnection.
+
+        :param str serial_port: The serial port to use (default COM3).
+        :param int baudrate: The serial port baud rate to use (default 57600).
+        :param int bytesize: The byte size to use (default 8).
+        :param str parity: The type of parity to use (default 'N').
+        :param int stopbits: The amount of stop bits (default 1).
+        :param bool xonxoff: XON/XOFF flow control (default False).
+        :param bool rtscts: RTS/CTS control signals (default False).
+        """
+        if self._serial_port:
+            raise ValueError('Already connected to serial port')
+        self._serial_port = serial.Serial(serial_port, baudrate=baudrate,
+                                          bytesize=bytesize, parity=parity,
+                                          stopbits=stopbits, xonxoff=xonxoff,
+                                          rtscts=rtscts, timeout=0)
+        if self._client_callback:
+            self._receiver = _ReceiveThread(self)
+            self._receiver.daemon = True
             self._receiver.start()
 
     def disconnect_from_server(self):
@@ -222,7 +263,10 @@ class Connection:
         if data:
             frame.extend(_encode_special(data))
         frame.extend(FEND)
-        self._sock.send(frame)
+        if self._sock: # if there's a TCP socket, use that
+            self._sock.send(frame)
+        elif self._serial_port: # otherwise use the serial port
+            self._serial_port.write(frame)
 
     def _frame_received(self, data):
         first_byte = data[0]
@@ -234,19 +278,22 @@ class Connection:
 
     def _receive_data(self):
         buffer = bytearray()
+        data = bytes()
 
         while True:
-            try:
-                data = self._sock.recv(_BUF_LEN)
-            except OSError as e:
-                if e.errno in (errno.EBADF, WSAENOTSOCK):
-                    # Socket closed
+            if self._sock:  # if there's a TCP socket, use that
+                try:
+                    data = self._sock.recv(_BUF_LEN)
+                except OSError as e:
+                    if e.errno in (errno.EBADF, WSAENOTSOCK):
+                        # Socket closed
+                        return
+                    raise
+                if not data:
                     return
-                raise
-            if not data:
-                return
+            elif self._serial_port:  # otherwise use the serial port
+                data = self._serial_port.read(_BUF_LEN)
             buffer += data
-            blen = len(buffer)
 
             while True:
                 fend = buffer.find(FEND)
@@ -255,7 +302,6 @@ class Connection:
                 if fend > 0:
                     self._frame_received(buffer[:fend])
                 buffer = buffer[fend + 1:]
-                blen -= (fend + 1)
 
 
 class _ReceiveThread(threading.Thread):

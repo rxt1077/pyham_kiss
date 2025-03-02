@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # =============================================================================
 # Copyright (c) 2022-2024 Martin F N Cooper
 #
@@ -28,20 +27,17 @@ could, however, form the basis of a more comprehensive application.
  * Minimal error handling.
 """
 
+import argparse
 import datetime
 import platform
 import queue
 import socket
-import sys
 import tkinter as tk
 from tkinter import ttk
 from tkinter import font as tkfont
 
 import ax25
 import kiss
-
-_DEF_HOST = '127.0.0.1'  # Default host
-_DEF_PORT = 8001         # Default port
 
 
 class Application(tk.Tk):
@@ -51,7 +47,7 @@ class Application(tk.Tk):
     """
     _ALARM_PERIOD = 100  # milliseconds to wait between alarms
 
-    def __init__(self, host, port):
+    def __init__(self, args):
         super().__init__()
 
         # Application window title
@@ -73,13 +69,13 @@ class Application(tk.Tk):
         self._frame_queue = queue.Queue()
 
         # Connect to the KISS server to receive packets
-        self._start_receiving(host, port)
+        self._start_receiving(args)
 
     def _quit(self):
         self._stop_receiving()
         self.destroy()
 
-    def _start_receiving(self, host, port):
+    def _start_receiving(self, args):
         """
         Connect to the KISS server and start receiving packets. Incoming
         packets are unpacked into frames, and added to a queue, along with
@@ -95,7 +91,17 @@ class Application(tk.Tk):
         self._connection = kiss.Connection(receive_callback)
         error = None
         try:
-            self._connection.connect_to_server(host, int(port))
+            # use serial if they specify a serial port AND DON'T specify a host
+            if args.serial_port and not args.host:
+                self._connection.connect_to_serial(
+                    serial_port=args.serial_port, baudrate=args.baudrate,
+                    bytesize=args.bytesize, parity=args.parity,
+                    stopbits=args.stopbits, xonxoff=args.xonxoff,
+                    rtscts=args.rtscts)
+            else:
+                # this means we can't have argparse use a default for host
+                host = args.host if args.host else kiss.DEF_HOST
+                self._connection.connect_to_server(host, args.port)
         except socket.gaierror as e:
             if e.errno == socket.EAI_NONAME:
                 error = 'Server name not found'
@@ -237,24 +243,26 @@ class HeardList(ttk.Frame):
 
 
 def main():
-    argc = len(sys.argv)
-    if argc == 1:
-        host = _DEF_HOST
-        port = _DEF_PORT
-    elif argc == 2:
-        host = sys.argv[1]
-        port = _DEF_PORT
-    elif argc == 3:
-        host = sys.argv[1]
-        try:
-            port = int(sys.argv[2])
-        except ValueError:
-            print('Port must be a number')
-            sys.exit(1)
-    else:
-        print('Usage: heard [<host> [<port>]]')
-        sys.exit(1)
-    app = Application(host, port)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str,
+                        help="IP address of host for TCP connection")
+    parser.add_argument("--port", type=str, default=kiss.DEF_PORT,
+                        help="port for TCP connection")
+    parser.add_argument("--serial", type=str,
+                        help="device for serial connection")
+    parser.add_argument("--baudrate", type=int, default=kiss.DEF_BAUDRATE,
+                        help="baud rate for serial connection")
+    parser.add_argument("--bytesize", type=int, default=kiss.DEF_BYTESIZE,
+                        help="byte size for serial connection")
+    parser.add_argument("--stopbits", type=int, default=kiss.DEF_STOPBITS,
+                        help="stop bits for serial connection")
+    parser.add_argument("--xonxoff", type=bool, default=kiss.DEF_XONXOFF,
+                        help="XON/XOFF for serial connection")
+    parser.add_argument("--rtscts", type=bool, default=kiss.DEF_RTSCTS,
+                        help="RTC/CTS for serial connection")
+    args = parser.parse_args()
+
+    app = Application(args)
     app.mainloop()
 
 
